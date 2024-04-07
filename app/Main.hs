@@ -2,6 +2,7 @@ module Main where
 
 import Graphics.HsExif     ( getDateTimeOriginal, parseFileExif )
 import System.Directory    
+import System.FilePath     ( (</>), splitFileName )
 import Data.Time.Format    ( defaultTimeLocale, formatTime )
 import Data.Time.LocalTime ( LocalTime )
 import Data.Maybe          ( catMaybes )
@@ -29,26 +30,36 @@ movePhotos t = mapM_ go
     where
         go (MkPhotoFile pfn pfp to) = renameFile pfp (t ++ "/" ++ fmtYm to ++ "/" ++ pfn)
 
-readPhoto :: FilePath -> String -> IO (Maybe PhotoFile)
-readPhoto pathPrefix fn = do
-    let fp = pathPrefix ++ fn
+readPhoto :: FilePath -> IO (Maybe PhotoFile)
+readPhoto fp = do
     exif <- parseFileExif fp
     let dateTaken = either (const Nothing) Just exif >>= getDateTimeOriginal
-    return $ MkPhotoFile fn fp <$> dateTaken
+    return $ MkPhotoFile (snd . splitFileName $ fp) fp <$> dateTaken
 
 readPhotos :: FilePath -> IO [PhotoFile]
-readPhotos fp = catMaybes <$> (listDirectory fp >>= mapM (readPhoto fp))
+readPhotos fp = catMaybes <$> (readDir fp >>= mapM readPhoto)
 
-readPhotoDir :: FilePath -> IO [Bool]
-readPhotoDir dirPath = listDirectory dirPath >>= mapM go
-    where go x = doesDirectoryExist $ dirPath ++ x
+readDir :: FilePath -> IO [FilePath]
+readDir topDir = do
+  names <- listDirectory topDir
+  paths <- mapM go names
+  return $ concat paths
+  where
+    go name = do
+      let path = topDir </> name
+      isDirectory <- doesDirectoryExist path
+      if isDirectory
+        then readDir path
+        else return [path]
 
-filePath, target :: FilePath
-filePath = "data/sampleDir/"
-target   = "data/targetDir/"
+archive :: FilePath -> FilePath -> IO ()
+archive from to = do
+    photos <- readPhotos from
+    let lof = listOfDates photos
+    createDirs to lof
+    movePhotos to photos
 
 main :: IO ()
 main = undefined
     
--- TODO: recursively walk sub-directories and construct flattened list of images
 -- TODO: support Posix & windows? 
