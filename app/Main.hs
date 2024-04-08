@@ -1,43 +1,63 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Main where
 
-import Graphics.HsExif     ( getDateTimeOriginal, parseFileExif )
-import System.Directory    
+import qualified Data.Text as T
+
+import ExifTool            ( ExifTool, get, readMetaEither, withExifTool, Metadata, Tag(Tag) )
+import Data.Text           ( Text )
+import System.Directory    ( doesDirectoryExist, listDirectory, copyFileWithMetadata, createDirectoryIfMissing, renameFile, copyFile )
 import System.FilePath     ( (</>), splitFileName )
-import Data.Time.Format    ( defaultTimeLocale, formatTime )
-import Data.Time.LocalTime ( LocalTime )
 import Data.Maybe          ( catMaybes )
 import Data.List           ( group, sort )
+import Control.Applicative ( (<|>) )
 
-type FmtDate = String
+type FmtDate = Text
 
 data PhotoFile = MkPhotoFile
            { photoFileName :: String
            , photoFilePath :: FilePath
-           , takenOn :: LocalTime }
+           , takenOn :: Text }
     deriving (Show, Eq)
 
-fmtYm :: LocalTime -> String
-fmtYm = formatTime defaultTimeLocale "%Y-%m"
+fmtYm :: Text -> Text
+fmtYm = T.intercalate "-" . take 2 . T.splitOn ":" . T.takeWhile (/= ' ')
 
 listOfDates :: [PhotoFile] -> [FmtDate]
 listOfDates = map head . group . sort . map (fmtYm . takenOn)
 
+hush :: Either a b -> Maybe b
+hush = either (const Nothing) Just
+
+dateTimeOriginal, creationDate :: Tag
+dateTimeOriginal = Tag "DateTimeOriginal"
+creationDate = Tag "CreationDate"
+
 createDirs :: FilePath -> [FmtDate] -> IO ()
-createDirs t = mapM_ (createDirectoryIfMissing True . (++) t)
+createDirs t = mapM_ (createDirectoryIfMissing True . (++) t . T.unpack)
 
-movePhotos :: FilePath -> [PhotoFile] -> IO ()
-movePhotos t = mapM_ go
+sortPhotos :: (FilePath -> FilePath -> IO ()) -> FilePath -> [PhotoFile] -> IO ()
+sortPhotos f targetDir = mapM_ go
     where
-        go (MkPhotoFile pfn pfp to) = renameFile pfp (t ++ "/" ++ fmtYm to ++ "/" ++ pfn)
+        go (MkPhotoFile pfn pfp to) = f pfp (targetDir </> T.unpack (fmtYm to) </> pfn)
 
-readPhoto :: FilePath -> IO (Maybe PhotoFile)
-readPhoto fp = do
-    exif <- parseFileExif fp
-    let dateTaken = either (const Nothing) Just exif >>= getDateTimeOriginal
-    return $ MkPhotoFile (snd . splitFileName $ fp) fp <$> dateTaken
+movePhotos, copyPhotos, copyPhotosM :: FilePath -> [PhotoFile] -> IO ()
+movePhotos = sortPhotos renameFile
+copyPhotos = sortPhotos copyFile
+copyPhotosM = sortPhotos copyFileWithMetadata
+
+readPhoto :: ExifTool -> FilePath -> IO (Maybe PhotoFile)
+readPhoto et fp = do
+    meta <- readMetaEither et [dateTimeOriginal, creationDate] fp
+
+    return $ do { cleanMeta <- hush meta; date <- getDate cleanMeta; return $ MkPhotoFile (snd . splitFileName $ fp) fp date}
+
+    where 
+        getDate :: Metadata -> Maybe Text
+        getDate meta = get dateTimeOriginal meta <|> get creationDate meta
 
 readPhotos :: FilePath -> IO [PhotoFile]
-readPhotos fp = catMaybes <$> (readDir fp >>= mapM readPhoto)
+readPhotos fp = withExifTool $ \ et -> catMaybes <$> (readDir fp >>= mapM (readPhoto et))
 
 readDir :: FilePath -> IO [FilePath]
 readDir topDir = do
@@ -54,12 +74,16 @@ readDir topDir = do
 
 archive :: FilePath -> FilePath -> IO ()
 archive from to = do
+    putStrLn $ "Starting hirchive: moving/copying files from '" ++ from ++ "' to '" ++ to ++ "' ...\n"
     photos <- readPhotos from
     let lof = listOfDates photos
     createDirs to lof
-    movePhotos to photos
+    copyPhotosM to photos
+    putStrLn "Done"
 
 main :: IO ()
 main = undefined
     
 -- TODO: support Posix & windows? 
+-- TODO: add logging/reports (corrputed files, wrong filetype ...)
+-- TODO: String/Text efficiency
