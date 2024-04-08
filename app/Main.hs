@@ -85,5 +85,5 @@ main :: IO ()
 main = undefined
     
 -- TODO: support Posix & windows? 
--- TODO: add logging/reports (corrputed files, wrong filetype ...)
+-- TODO: add logging/reports (corrupted files, wrong filetype ...)
 -- TODO: String/Text efficiency
