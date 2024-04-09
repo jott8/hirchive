@@ -8,6 +8,7 @@ import ExifTool            ( ExifTool, get, readMetaEither, withExifTool, Metada
 import Data.Text           ( Text )
 import System.Directory    ( doesDirectoryExist, listDirectory, copyFileWithMetadata, createDirectoryIfMissing, renameFile, copyFile )
 import System.FilePath     ( (</>), splitFileName )
+import System.Environment  ( getArgs )
 import Data.Maybe          ( catMaybes )
 import Data.List           ( group, sort )
 import Control.Applicative ( (<|>) )
@@ -72,18 +73,38 @@ readDir topDir = do
         then readDir path
         else return [path]
 
-archive :: FilePath -> FilePath -> IO ()
-archive from to = do
+archive :: (FilePath -> [PhotoFile] -> IO ()) -> FilePath -> FilePath -> IO ()
+archive movementFunc from to = do
     putStrLn $ "Starting hirchive: moving/copying files from '" ++ from ++ "' to '" ++ to ++ "' ...\n"
     photos <- readPhotos from
     let lof = listOfDates photos
     createDirs to lof
-    copyPhotosM to photos
+    movementFunc to photos
     putStrLn "Done"
 
+usage :: String
+usage = "+---------------+\n"                                                                     ++
+        "|hirchive - Help|\n"                                                                     ++
+        "+---------------+\n"                                                                     ++
+        "1) Move files (-m), copy files with metadata (-cm), copy without m.d. (-m)\n\n" ++
+        "        hirchive [-m,-c,-cm] dir targetDir\n\n" ++
+        "2) Print this help message\n\n" ++
+        "        hirchive -h\n"
+
+printUsage :: IO ()
+printUsage = putStrLn usage
+
 main :: IO ()
-main = undefined
+main = do
+    args <- getArgs
+    case args of
+        ["-m", path, targetPath]  -> archive movePhotos path targetPath
+        ["-c", path, targetPath]  -> archive copyPhotos path targetPath
+        ["-cm", path, targetPath] -> archive copyPhotosM path targetPath
+        ["-h"]                    -> printUsage
+        _                         -> printUsage
     
 -- TODO: support Posix & windows? 
 -- TODO: add logging/reports (corrupted files, wrong filetype ...)
+-- TODO: seperate pure & IO
 -- TODO: String/Text efficiency
