@@ -83,13 +83,13 @@ archive movementFunc from to = do
     putStrLn "Done"
 
 usage :: String
-usage = "+---------------+\n"                                                                     ++
-        "|hirchive - Help|\n"                                                                     ++
-        "+---------------+\n"                                                                     ++
-        "1) Move files (-m), copy files with metadata (-cm), copy without m.d. (-m)\n\n" ++
-        "        hirchive [-m,-c,-cm] dir targetDir\n\n" ++
-        "2) Print this help message\n\n" ++
-        "        hirchive -h\n"
+usage = "+-----------------+\n"                                                                     ++
+        "| hirchive - Help |\n"                                                                     ++
+        "+-----------------+\n"                                                                     ++
+        "1) Move files (-m), copy files with metadata (-cm), copy without m.d. (-m)\n" ++
+        "   - hirchive [-m,-c,-cm] dir targetDir\n\n" ++
+        "2) Print this help message\n" ++
+        "   - hirchive -h"
 
 printUsage :: IO ()
 printUsage = putStrLn usage
