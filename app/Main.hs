@@ -35,7 +35,7 @@ dateTimeOriginal = Tag "DateTimeOriginal"
 creationDate = Tag "CreationDate"
 
 createDirs :: FilePath -> [FmtDate] -> IO ()
-createDirs t = mapM_ (createDirectoryIfMissing True . (++) t . T.unpack)
+createDirs t = mapM_ (createDirectoryIfMissing True . (</>) t . T.unpack)
 
 sortPhotos :: (FilePath -> FilePath -> IO ()) -> FilePath -> [PhotoFile] -> IO ()
 sortPhotos f targetDir = mapM_ go
@@ -48,11 +48,13 @@ copyPhotos = sortPhotos copyFile
 copyPhotosM = sortPhotos copyFileWithMetadata
 
 readPhoto :: ExifTool -> FilePath -> IO (Maybe PhotoFile)
-readPhoto et fp = do
-    meta <- readMetaEither et [dateTimeOriginal, creationDate] fp
+readPhoto et fp = photoFromMeta fp <$> readMetaEither et [dateTimeOriginal, creationDate] fp
 
-    return $ do { cleanMeta <- hush meta; date <- getDate cleanMeta; return $ MkPhotoFile (snd . splitFileName $ fp) fp date}
-
+photoFromMeta :: FilePath -> Either a Metadata -> Maybe PhotoFile
+photoFromMeta fp meta = do
+        cleanMeta <- hush meta
+        date      <- getDate cleanMeta
+        return $ MkPhotoFile (snd . splitFileName $ fp) fp date
     where 
         getDate :: Metadata -> Maybe Text
         getDate meta = get dateTimeOriginal meta <|> get creationDate meta
@@ -83,9 +85,9 @@ archive movementFunc from to = do
     putStrLn "Done"
 
 usage :: String
-usage = "+-----------------+\n"                                                                     ++
-        "| hirchive - Help |\n"                                                                     ++
-        "+-----------------+\n"                                                                     ++
+usage = "+-----------------+\n" ++
+        "| hirchive - Help |\n" ++
+        "+-----------------+\n" ++
         "1) Move files (-m), copy files with metadata (-cm), copy without m.d. (-m)\n" ++
         "   - hirchive [-m,-c,-cm] dir targetDir\n\n" ++
         "2) Print this help message\n" ++
