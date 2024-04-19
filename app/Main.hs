@@ -1,5 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
-
+{-# LANGUAGE OverloadedStrings, NamedFieldPuns #-}
 module Main where
 
 import qualified Data.Text as T
@@ -7,13 +6,24 @@ import qualified Data.Text as T
 import ExifTool            ( ExifTool, get, readMetaEither, withExifTool, Metadata, Tag(Tag) )
 import Data.Text           ( Text )
 import System.Directory    ( doesDirectoryExist, listDirectory, copyFileWithMetadata, createDirectoryIfMissing, renameFile, copyFile )
-import System.FilePath     ( (</>), splitFileName )
+import System.FilePath     ( takeExtension, (</>), splitFileName )
 import System.Environment  ( getArgs )
 import Data.Maybe          ( catMaybes )
 import Data.List           ( group, sort )
 import Control.Applicative ( (<|>) )
+import Control.Monad.Reader
+import Control.Monad.Trans.Maybe 
 
 type FmtDate = Text
+
+type ConfigM = ReaderT Config
+
+data Config = Config
+    { dirPath :: FilePath
+    , targetPath :: FilePath
+    , rnFile :: Bool
+    , movementSetting :: FilePath -> FilePath -> IO ()
+    } 
 
 data PhotoFile = MkPhotoFile
            { photoFileName :: String
@@ -23,6 +33,9 @@ data PhotoFile = MkPhotoFile
 
 fmtYm :: Text -> Text
 fmtYm = T.intercalate "-" . take 2 . T.splitOn ":" . T.takeWhile (/= ' ')
+
+fmtFullDate :: Text -> Text
+fmtFullDate = T.replace " " "-" . T.replace ":" "I"
 
 listOfDates :: [PhotoFile] -> [FmtDate]
 listOfDates = map head . group . sort . map (fmtYm . takenOn)
@@ -34,33 +47,32 @@ dateTimeOriginal, creationDate :: Tag
 dateTimeOriginal = Tag "DateTimeOriginal"
 creationDate = Tag "CreationDate"
 
-createDirs :: FilePath -> [FmtDate] -> IO ()
-createDirs t = mapM_ (createDirectoryIfMissing True . (</>) t . T.unpack)
+createDirs :: [FmtDate] -> ConfigM IO ()
+createDirs dates = do
+    Config {targetPath} <- ask
+    mapM_ (liftIO . createDirectoryIfMissing True . (</>) targetPath . T.unpack) dates
 
-sortPhotos :: (FilePath -> FilePath -> IO ()) -> FilePath -> [PhotoFile] -> IO ()
-sortPhotos f targetDir = mapM_ go
+sortPhotos :: [PhotoFile] -> ConfigM IO ()
+sortPhotos photos = do 
+    Config {targetPath, movementSetting} <- ask
+    mapM_ (go targetPath movementSetting) photos
     where
-        go (MkPhotoFile pfn pfp to) = f pfp (targetDir </> T.unpack (fmtYm to) </> pfn)
-
-movePhotos, copyPhotos, copyPhotosM :: FilePath -> [PhotoFile] -> IO ()
-movePhotos = sortPhotos renameFile
-copyPhotos = sortPhotos copyFile
-copyPhotosM = sortPhotos copyFileWithMetadata
+        go tp f (MkPhotoFile pfn pfp to) = liftIO $ f pfp (tp </> T.unpack (fmtYm to) </> T.unpack (fmtFullDate to) ++ takeExtension pfn )
 
 readPhoto :: ExifTool -> FilePath -> IO (Maybe PhotoFile)
 readPhoto et fp = photoFromMeta fp <$> readMetaEither et [dateTimeOriginal, creationDate] fp
 
 photoFromMeta :: FilePath -> Either a Metadata -> Maybe PhotoFile
 photoFromMeta fp meta = do
-        cleanMeta <- hush meta
-        date      <- getDate cleanMeta
-        return $ MkPhotoFile (snd . splitFileName $ fp) fp date
+    cleanMeta <- hush meta
+    date      <- getDate cleanMeta
+    return $ MkPhotoFile (snd . splitFileName $ fp) fp date
     where 
         getDate :: Metadata -> Maybe Text
-        getDate meta = get dateTimeOriginal meta <|> get creationDate meta
+        getDate m = get dateTimeOriginal m <|> get creationDate m
 
-readPhotos :: FilePath -> IO [PhotoFile]
-readPhotos fp = withExifTool $ \ et -> catMaybes <$> (readDir fp >>= mapM (readPhoto et))
+readPhotos :: FilePath -> ConfigM IO [PhotoFile]
+readPhotos fp = liftIO $ withExifTool $ \ et -> catMaybes <$> (readDir fp >>= mapM (readPhoto et))
 
 readDir :: FilePath -> IO [FilePath]
 readDir topDir = do
@@ -75,37 +87,44 @@ readDir topDir = do
         then readDir path
         else return [path]
 
-archive :: (FilePath -> [PhotoFile] -> IO ()) -> FilePath -> FilePath -> IO ()
-archive movementFunc from to = do
-    putStrLn $ "Starting hirchive: moving/copying files from '" ++ from ++ "' to '" ++ to ++ "' ...\n"
-    photos <- readPhotos from
-    let lof = listOfDates photos
-    createDirs to lof
-    movementFunc to photos
-    putStrLn "Done"
-
-usage :: String
-usage = "+-----------------+\n" ++
-        "| hirchive - Help |\n" ++
-        "+-----------------+\n" ++
-        "1) Move files (-m), copy files with metadata (-cm), copy without m.d. (-m)\n" ++
-        "   - hirchive [-m,-c,-cm] dir targetDir\n\n" ++
-        "2) Print this help message\n" ++
-        "   - hirchive -h"
+archive :: ConfigM IO ()
+archive = do
+    Config {dirPath, targetPath} <- ask
+    liftIO $ putStrLn $ "Starting hirchive: moving/copying files from '" ++ dirPath ++ "' to '" ++ targetPath ++ "' ...\n"
+    photos <- readPhotos dirPath
+    let lod = listOfDates photos
+    createDirs lod
+    sortPhotos photos
+    liftIO $ putStrLn "Done"
 
 printUsage :: IO ()
 printUsage = putStrLn usage
+    where
+        usage = "+-----------------+\n" ++
+                "| hirchive - Help |\n" ++
+                "+-----------------+\n" ++
+                "1) Move files (-m), copy files with metadata (-cm), copy without m.d. (-m)\n" ++
+                "   - hirchive [-m,-c,-cm] dir targetDir\n\n" ++
+                "2) Print this help message\n" ++
+                "   - hirchive -h"
+
+
+loadConfig :: MaybeT IO Config
+loadConfig = do
+    args <- liftIO getArgs
+
+    case args of
+        ["-m", path, tp]  -> return $ Config path tp True renameFile
+        ["-c", path, tp]  -> return $ Config path tp True copyFile
+        ["-cm", path, tp] -> return $ Config path tp True copyFileWithMetadata
+        _                 -> mzero
 
 main :: IO ()
-main = do
-    args <- getArgs
-    case args of
-        ["-m", path, targetPath]  -> archive movePhotos path targetPath
-        ["-c", path, targetPath]  -> archive copyPhotos path targetPath
-        ["-cm", path, targetPath] -> archive copyPhotosM path targetPath
-        ["-h"]                    -> printUsage
-        _                         -> printUsage
-    
+main = runMaybeT loadConfig >>= maybe printUsage start
+    where
+        start :: Config -> IO ()
+        start = runReaderT archive
+
 -- TODO: support Posix & windows? 
 -- TODO: add logging/reports (corrupted files, wrong filetype ...)
 -- TODO: seperate pure & IO
